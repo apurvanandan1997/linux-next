@@ -534,6 +534,15 @@ static int cqspi_command_read(struct cqspi_flash_pdata *f_pdata,
 	rdreg = cqspi_calc_rdreg(f_pdata);
 	writel(rdreg, reg_base + CQSPI_REG_RD_INSTR);
 
+	if (op->addr.nbytes) {
+		reg |= (0x1 << CQSPI_REG_CMDCTRL_ADDR_EN_LSB);
+		reg |= ((op->addr.nbytes - 1) &
+			CQSPI_REG_CMDCTRL_ADD_BYTES_MASK)
+			<< CQSPI_REG_CMDCTRL_ADD_BYTES_LSB;
+
+		writel(op->addr.val, reg_base + CQSPI_REG_CMDADDRESS);
+	}
+
 	dummy_clk = cqspi_calc_dummy(op, f_pdata->dtr);
 	if (dummy_clk > CQSPI_DUMMY_CLKS_MAX)
 		return -EOPNOTSUPP;
@@ -578,6 +587,7 @@ static int cqspi_command_write(struct cqspi_flash_pdata *f_pdata,
 	size_t n_tx = op->data.nbytes;
 	unsigned int reg;
 	unsigned int data;
+	unsigned int dummy_clk;
 	size_t write_len;
 	int ret;
 
@@ -615,6 +625,14 @@ static int cqspi_command_write(struct cqspi_flash_pdata *f_pdata,
 
 		writel(op->addr.val, reg_base + CQSPI_REG_CMDADDRESS);
 	}
+
+	dummy_clk = cqspi_calc_dummy(op, f_pdata->dtr);
+	if (dummy_clk > CQSPI_DUMMY_CLKS_MAX)
+		return -EOPNOTSUPP;
+
+	if (dummy_clk)
+		reg |= (dummy_clk & CQSPI_REG_CMDCTRL_DUMMY_MASK)
+		     << CQSPI_REG_CMDCTRL_DUMMY_LSB;
 
 	if (n_tx) {
 		reg |= (0x1 << CQSPI_REG_CMDCTRL_WR_EN_LSB);
@@ -1199,13 +1217,14 @@ static int cqspi_mem_process(struct spi_mem *mem, const struct spi_mem_op *op)
 	cqspi_configure(f_pdata, mem->spi->max_speed_hz);
 
 	if (op->data.dir == SPI_MEM_DATA_IN && op->data.buf.in) {
-		if (!op->addr.nbytes)
+		if (!op->addr.nbytes ||
+		    op->data.nbytes <= CQSPI_STIG_DATA_LEN_MAX)
 			return cqspi_command_read(f_pdata, op);
 
 		return cqspi_read(f_pdata, op);
 	}
 
-	if (!op->addr.nbytes || !op->data.buf.out)
+	if (!op->addr.nbytes || op->data.nbytes <= CQSPI_STIG_DATA_LEN_MAX)
 		return cqspi_command_write(f_pdata, op);
 
 	return cqspi_write(f_pdata, op);
